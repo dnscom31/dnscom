@@ -1,0 +1,53 @@
+name: Build NKG Offline Runtime
+on:
+  push:
+    branches: [ main ]
+    paths:
+      - '.github/workflows/build_nkg_runtime.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-runtime:
+    runs-on: windows-latest
+    steps:
+      - name: Prepare full private Python runtime
+        shell: powershell
+        run: |
+          $ErrorActionPreference = "Stop"
+          $root = Join-Path $env:GITHUB_WORKSPACE "offline_runtime"
+          $runtime = Join-Path $root "_runtime"
+          New-Item -ItemType Directory -Force -Path $root | Out-Null
+          $installer = Join-Path $root "python-3.11.9-amd64.exe"
+          Invoke-WebRequest -UseBasicParsing "https://www.python.org/ftp/python/3.11.9/python-3.11.9-amd64.exe" -OutFile $installer
+          $args = @(
+            "/quiet",
+            "InstallAllUsers=0",
+            "TargetDir=$runtime",
+            "Include_pip=1",
+            "Include_tcltk=1",
+            "Include_test=0",
+            "Include_doc=0",
+            "Include_launcher=0",
+            "AssociateFiles=0",
+            "Shortcuts=0",
+            "PrependPath=0",
+            "CompileAll=0"
+          )
+          $p = Start-Process -FilePath $installer -ArgumentList $args -Wait -PassThru
+          if ($p.ExitCode -ne 0) { throw "Python installer failed: $($p.ExitCode)" }
+          & "$runtime\python.exe" -m pip install --disable-pip-version-check --no-warn-script-location openpyxl==3.1.5 reportlab==4.4.3 pillow==11.3.0 charset-normalizer==3.4.3
+          & "$runtime\python.exe" -c "import tkinter,openpyxl,reportlab,PIL,charset_normalizer; print('offline runtime ok')"
+          Remove-Item $installer -Force
+          Get-ChildItem -Recurse -Force "$runtime\Lib\site-packages" -Directory -Filter "__pycache__" | Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
+          Compress-Archive -Path "$runtime\*" -DestinationPath "$root\NKG_Python_Runtime_3.11.9_x64.zip" -CompressionLevel Optimal
+
+      - name: Upload offline runtime
+        uses: actions/upload-artifact@v4
+        with:
+          name: NKG_Python_Runtime_3.11.9_x64
+          path: offline_runtime/NKG_Python_Runtime_3.11.9_x64.zip
+          retention-days: 1
+          compression-level: 0
