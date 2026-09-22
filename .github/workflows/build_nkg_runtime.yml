@@ -4,6 +4,10 @@ on:
     branches: [ main ]
     paths:
       - '.github/workflows/build_nkg_runtime.yml'
+  pull_request:
+    branches: [ main ]
+    paths:
+      - 'runtime-trigger.txt'
   workflow_dispatch:
 
 permissions:
