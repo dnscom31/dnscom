@@ -68,11 +68,11 @@ final class FaceSwapEngine implements AutoCloseable {
         detector = FaceDetection.getClient(options);
 
         status.onStatus("ArcFace 모델 로딩…");
-        arcSession = openSession(copyAsset("models/w600k_r50.onnx"), true);
+        arcSession = openSession(resolveModel(ModelStore.ARC, "models/w600k_r50.onnx"), true);
         status.onStatus("임베딩 변환 모델 로딩…");
-        converterSession = openSession(copyAsset("models/crossface_ghost.onnx"), true);
+        converterSession = openSession(resolveModel(ModelStore.CONVERTER, "models/crossface_ghost.onnx"), true);
         status.onStatus("얼굴 생성 모델 로딩…");
-        swapSession = openSession(copyAsset("models/ghost_1_256.onnx"), true);
+        swapSession = openSession(resolveModel(ModelStore.SWAP, "models/ghost_1_256.onnx"), true);
     }
 
     private OrtSession openSession(File model, boolean tryNnapi) throws Exception {
@@ -100,18 +100,20 @@ final class FaceSwapEngine implements AutoCloseable {
         return s;
     }
 
-    private File copyAsset(String name) throws Exception {
-        File dir = new File(context.getFilesDir(), "models");
-        if (!dir.exists() && !dir.mkdirs()) throw new IllegalStateException("Cannot create model directory");
-        String base = name.substring(name.lastIndexOf('/') + 1);
-        File out = new File(dir, base);
-        if (out.exists() && out.length() > 1024 * 1024) return out;
+    private File resolveModel(String storedName, String packagedAsset) throws Exception {
+        File stored = ModelStore.file(context, storedName);
+        if (stored.exists() && stored.length() > 1024 * 1024) return stored;
 
-        try (InputStream in = context.getAssets().open(name);
+        // Optional fallback for private builds that legally bundle a model.
+        File dir = ModelStore.dir(context);
+        File out = new File(dir, storedName);
+        try (InputStream in = context.getAssets().open(packagedAsset);
              FileOutputStream fos = new FileOutputStream(out)) {
             byte[] buf = new byte[1024 * 1024];
             int n;
             while ((n = in.read(buf)) > 0) fos.write(buf, 0, n);
+        } catch (Exception e) {
+            throw new IllegalStateException("AI 모델이 없습니다: " + storedName + ". 앱에서 모델을 먼저 불러오세요.", e);
         }
         return out;
     }
