@@ -22,11 +22,13 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
 public class MainActivity extends Activity {
+    private static final int REQ_MODELS = 1000;
     private static final int REQ_SOURCE = 1001;
     private static final int REQ_VIDEO = 1002;
 
     private Uri sourceUri;
     private Uri videoUri;
+    private TextView modelText;
     private TextView sourceText;
     private TextView videoText;
     private TextView statusText;
@@ -39,6 +41,8 @@ public class MainActivity extends Activity {
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         setContentView(buildUi());
+        updateModelStatus();
+        updateRunEnabled();
     }
 
     private View buildUi() {
@@ -56,11 +60,18 @@ public class MainActivity extends Activity {
         root.addView(title, matchWrap());
 
         TextView subtitle = new TextView(this);
-        subtitle.setText("사진 1장 + 대상 동영상 → 기기 내부 얼굴 교체\n네트워크 권한 없음 · 결과에 AI face swap 표식");
+        subtitle.setText("사진 1장 + 대상 동영상 → 기기 내부 얼굴 교체\n인터넷 권한 없음 · 결과에 AI face swap 표식");
         subtitle.setTextSize(14);
         subtitle.setTextColor(0xFF5D6678);
-        subtitle.setPadding(0, 0, 0, dp(20));
+        subtitle.setPadding(0, 0, 0, dp(16));
         root.addView(subtitle, matchWrap());
+
+        Button modelButton = makeButton("0. AI 모델 3개 불러오기 · 최초 1회");
+        modelButton.setOnClickListener(v -> pickModels());
+        root.addView(modelButton, matchWrap());
+
+        modelText = makeInfo("모델 확인 중…");
+        root.addView(modelText, matchWrap());
 
         Button sourceButton = makeButton("1. 얼굴 사진 선택");
         sourceButton.setOnClickListener(v -> pick("image/*", REQ_SOURCE));
@@ -80,6 +91,7 @@ public class MainActivity extends Activity {
         consentCheck.setText("본인 또는 사용 동의를 받은 얼굴/영상입니다.");
         consentCheck.setTextColor(0xFF303849);
         consentCheck.setPadding(0, dp(12), 0, dp(12));
+        consentCheck.setOnCheckedChangeListener((buttonView, isChecked) -> updateRunEnabled());
         root.addView(consentCheck, matchWrap());
 
         runButton = makeButton("3. 얼굴 교체 시작");
@@ -97,7 +109,7 @@ public class MainActivity extends Activity {
         statusText.setTextColor(0xFF3157D5);
         root.addView(statusText, matchWrap());
 
-        TextView note = makeInfo("MVP 기본값: 최대 1280px / 20fps. 급격한 회전·가림에서는 억지로 합성하지 않고 원본 프레임을 유지해 뭉개짐을 줄입니다.");
+        TextView note = makeInfo("MVP 기본값: 최대 1280px / 20fps. 급격한 회전·가림에서는 억지로 합성하지 않고 원본 프레임을 유지해 얼굴 뭉개짐을 줄입니다.");
         note.setPadding(0, dp(14), 0, 0);
         root.addView(note, matchWrap());
 
@@ -138,10 +150,33 @@ public class MainActivity extends Activity {
         startActivityForResult(i, requestCode);
     }
 
+    private void pickModels() {
+        Intent i = new Intent(Intent.ACTION_OPEN_DOCUMENT);
+        i.addCategory(Intent.CATEGORY_OPENABLE);
+        i.setType("*/*");
+        i.putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true);
+        i.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION);
+        startActivityForResult(i, REQ_MODELS);
+    }
+
     @Override
     protected void onActivityResult(int requestCode, int resultCode, Intent data) {
         super.onActivityResult(requestCode, resultCode, data);
-        if (resultCode != RESULT_OK || data == null || data.getData() == null) return;
+        if (resultCode != RESULT_OK || data == null) return;
+
+        if (requestCode == REQ_MODELS) {
+            try {
+                int count = ModelStore.importFromIntent(this, data);
+                updateModelStatus();
+                Toast.makeText(this, count + "개 모델 파일을 가져왔습니다.", Toast.LENGTH_SHORT).show();
+            } catch (Exception e) {
+                Toast.makeText(this, "모델 가져오기 실패: " + e.getMessage(), Toast.LENGTH_LONG).show();
+            }
+            updateRunEnabled();
+            return;
+        }
+
+        if (data.getData() == null) return;
         Uri uri = data.getData();
         try {
             getContentResolver().takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION);
@@ -154,7 +189,23 @@ public class MainActivity extends Activity {
             videoUri = uri;
             videoText.setText("대상 동영상: " + shortName(uri));
         }
-        runButton.setEnabled(sourceUri != null && videoUri != null);
+        updateRunEnabled();
+    }
+
+    private void updateModelStatus() {
+        if (modelText == null) return;
+        boolean ready = ModelStore.ready(this);
+        modelText.setText(ModelStore.status(this));
+        modelText.setTextColor(ready ? 0xFF167A42 : 0xFFB26A00);
+    }
+
+    private void updateRunEnabled() {
+        if (runButton == null) return;
+        runButton.setEnabled(ModelStore.ready(this)
+                && sourceUri != null
+                && videoUri != null
+                && consentCheck != null
+                && consentCheck.isChecked());
     }
 
     private String shortName(Uri uri) {
@@ -164,6 +215,10 @@ public class MainActivity extends Activity {
     }
 
     private void runSwap() {
+        if (!ModelStore.ready(this)) {
+            Toast.makeText(this, "먼저 AI 모델 3개를 불러오세요.", Toast.LENGTH_SHORT).show();
+            return;
+        }
         if (sourceUri == null || videoUri == null) return;
         if (!consentCheck.isChecked()) {
             Toast.makeText(this, "사용 동의 확인이 필요합니다.", Toast.LENGTH_SHORT).show();
@@ -195,13 +250,13 @@ public class MainActivity extends Activity {
                     progressBar.setProgress(1000);
                     statusText.setText("완료: Movies/FaceMVP에 저장됨");
                     Toast.makeText(this, "저장 완료\n" + finalOutput, Toast.LENGTH_LONG).show();
-                    runButton.setEnabled(true);
+                    updateRunEnabled();
                 });
             } catch (Throwable t) {
                 String msg = t.getClass().getSimpleName() + ": " + (t.getMessage() == null ? "알 수 없는 오류" : t.getMessage());
                 runOnUiThread(() -> {
                     statusText.setText("오류: " + msg);
-                    runButton.setEnabled(true);
+                    updateRunEnabled();
                 });
             } finally {
                 if (engine != null) {
